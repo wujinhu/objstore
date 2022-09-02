@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -416,6 +415,6 @@ func TestBucket_Get_ShouldReturnErrorIfServerTruncateResponse(t *testing.T) {
 	testutil.Ok(t, err)
 
 	// We expect an error when reading back.
-	_, err = ioutil.ReadAll(reader)
+	_, err = io.ReadAll(reader)
 	testutil.Equals(t, io.ErrUnexpectedEOF, err)
 }

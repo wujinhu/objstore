@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"runtime"
@@ -282,7 +281,7 @@ func NewBucketWithConfig(logger log.Logger, config Config, component string) (*B
 			}
 
 		case SSEC:
-			key, err := ioutil.ReadFile(config.SSEConfig.EncryptionKey)
+			key, err := os.ReadFile(config.SSEConfig.EncryptionKey)
 			if err != nil {
 				return nil, err
 			}
