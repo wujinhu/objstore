@@ -539,8 +539,15 @@ config:
   bucket: ""
   access_key_id: ""
   access_key_secret: ""
+  ecs_role_name: ""
 prefix: ""
 ```
+
+This provider supports two kinds of authentication:
+1. [ecs ram role](https://www.alibabacloud.com/help/en/elastic-compute-service/latest/use-ram-roles-to-access-other-alibaba-cloud-services)
+2. [accessKey pair of a ram user](https://www.alibabacloud.com/help/en/object-storage-service/latest/use-the-accesskey-pair-of-a-ram-user-to-initiate-a-request)
+
+This provider will check `ecs_role_name` first, ecs ram role authentication will be used if it's not empty.
 
 ##### Baidu BOS
 

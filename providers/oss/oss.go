@@ -18,6 +18,7 @@ import (
 	"time"
 
 	alioss "github.com/aliyun/aliyun-oss-go-sdk/oss"
+	alicredentials "github.com/aliyun/credentials-go/credentials"
 	"github.com/go-kit/log"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
@@ -36,6 +37,7 @@ type Config struct {
 	Bucket          string `yaml:"bucket"`
 	AccessKeyID     string `yaml:"access_key_id"`
 	AccessKeySecret string `yaml:"access_key_secret"`
+	RoleName        string `yaml:"ecs_role_name"` // Role name of the ECS binding, NOT ROLE ARN.
 }
 
 // Bucket implements the store.Bucket interface.
@@ -53,12 +55,18 @@ func NewTestBucket(t testing.TB) (objstore.Bucket, func(), error) {
 		Bucket:          os.Getenv("ALIYUNOSS_BUCKET"),
 		AccessKeyID:     os.Getenv("ALIYUNOSS_ACCESS_KEY_ID"),
 		AccessKeySecret: os.Getenv("ALIYUNOSS_ACCESS_KEY_SECRET"),
+		RoleName:        os.Getenv("ALIYUNOSS_ROLE_NAME"),
 	}
 
-	if c.Endpoint == "" || c.AccessKeyID == "" || c.AccessKeySecret == "" {
-		return nil, nil, errors.New("aliyun oss endpoint or access_key_id or access_key_secret " +
+	if c.Endpoint == "" {
+		return nil, nil, errors.New("aliyun oss endpoint is not present in config file")
+	}
+
+	if c.RoleName == "" && (c.AccessKeyID == "" || c.AccessKeySecret == "") {
+		return nil, nil, errors.New("aliyun oss role_name or access_key_id or access_key_secret " +
 			"is not present in config file")
 	}
+
 	if c.Bucket != "" && os.Getenv("THANOS_ALLOW_EXISTING_BUCKET_USE") == "true" {
 		t.Log("ALIYUNOSS_BUCKET is defined. Normally this tests will create temporary bucket " +
 			"and delete it after test. Unset ALIYUNOSS_BUCKET env variable to use default logic. If you really want to run " +
@@ -168,13 +176,68 @@ func NewBucket(logger log.Logger, conf []byte, component string) (*Bucket, error
 	return NewBucketWithConfig(logger, config, component)
 }
 
+type ossCredentials struct {
+	ecsCredential alicredentials.Credential
+	logger log.Logger
+}
+
+func (defCre *ossCredentials) GetAccessKeyID() string {
+	accessKeyId, err := defCre.ecsCredential.GetAccessKeyId()
+	if err != nil {
+		defCre.logger.Log("GetAccessKeyId() failed.")
+		return ""
+	}
+	return *accessKeyId
+}
+
+func (defCre *ossCredentials) GetAccessKeySecret() string {
+	accessKeySecret, err := defCre.ecsCredential.GetAccessKeySecret()
+	if err != nil {
+		defCre.logger.Log("GetAccessKeySecret() failed.")
+		return ""
+	}
+	return *accessKeySecret
+}
+
+func (defCre *ossCredentials) GetSecurityToken() string {
+	securityToken, err := defCre.ecsCredential.GetSecurityToken()
+	if err != nil {
+		defCre.logger.Log("GetSecurityToken() failed.")
+		return ""
+	}
+	return *securityToken
+}
+
+type ossCredentialsProvider struct {
+	ecsCredential alicredentials.Credential
+	logger log.Logger
+}
+
+func (provider *ossCredentialsProvider) GetCredentials() alioss.Credentials {
+	return &ossCredentials{ecsCredential:provider.ecsCredential, logger: provider.logger}
+}
+
 // NewBucketWithConfig returns a new Bucket using the provided oss config struct.
 func NewBucketWithConfig(logger log.Logger, config Config, component string) (*Bucket, error) {
 	if err := validate(config); err != nil {
 		return nil, err
 	}
 
-	client, err := alioss.New(config.Endpoint, config.AccessKeyID, config.AccessKeySecret)
+	var client *alioss.Client
+	var err error
+	if config.RoleName != "" {
+		ecsCredential, err := alicredentials.NewCredential(
+			new(alicredentials.Config).SetType("ecs_ram_role").SetRoleName(config.RoleName))
+		if err != nil {
+			return nil, errors.Wrap(err, "create aliyun oss client failed")
+		}
+		var opts []alioss.ClientOption
+		opts = append(opts, alioss.SetCredentialsProvider(
+			&ossCredentialsProvider{ecsCredential: ecsCredential, logger: logger}))
+		client, err = alioss.New(config.Endpoint, "", "", opts...)
+	} else {
+		client, err = alioss.New(config.Endpoint, config.AccessKeyID, config.AccessKeySecret)
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "create aliyun oss client failed")
 	}
@@ -198,8 +261,8 @@ func validate(config Config) error {
 	if config.Endpoint == "" || config.Bucket == "" {
 		return errors.New("aliyun oss endpoint or bucket is not present in config file")
 	}
-	if config.AccessKeyID == "" || config.AccessKeySecret == "" {
-		return errors.New("aliyun oss access_key_id or access_key_secret is not present in config file")
+	if config.RoleName == "" && (config.AccessKeyID == "" || config.AccessKeySecret == "") {
+		return errors.New("aliyun oss role_name or access_key_id or access_key_secret is not present in config file")
 	}
 
 	return nil
@@ -256,10 +319,25 @@ func NewTestBucketFromConfig(t testing.TB, c Config, reuseBucket bool) (objstore
 		src := rand.NewSource(time.Now().UnixNano())
 
 		bktToCreate := strings.ReplaceAll(fmt.Sprintf("test_%s_%x", strings.ToLower(t.Name()), src.Int63()), "_", "-")
+		bktToCreate = strings.ReplaceAll(bktToCreate, "/", "-")
 		if len(bktToCreate) >= 63 {
 			bktToCreate = bktToCreate[:63]
 		}
-		testclient, err := alioss.New(c.Endpoint, c.AccessKeyID, c.AccessKeySecret)
+		var testclient *alioss.Client
+		var err error
+		if c.RoleName != "" {
+			ecsCredential, err := alicredentials.NewCredential(
+				new(alicredentials.Config).SetType("ecs_ram_role").SetRoleName(c.RoleName))
+			if err != nil {
+				return nil, nil, errors.Wrap(err, "create aliyun oss client failed")
+			}
+			var opts []alioss.ClientOption
+			opts = append(opts, alioss.SetCredentialsProvider(
+				&ossCredentialsProvider{ecsCredential: ecsCredential}))
+			testclient, err = alioss.New(c.Endpoint, "", "", opts...)
+		} else {
+			testclient, err = alioss.New(c.Endpoint, c.AccessKeyID, c.AccessKeySecret)
+		}
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "create aliyun oss client failed")
 		}
@@ -319,6 +397,10 @@ func (b *Bucket) setRange(start, end int64, name string) (alioss.Option, error) 
 		}
 
 		opt = alioss.Range(start, end)
+	} else if 0 < start && end == 0 {
+		opt = alioss.NormalizedRange(fmt.Sprintf("%d-", start))
+	} else if start == 0 && end < 0 {
+		opt = alioss.NormalizedRange(fmt.Sprintf("%d", end))
 	} else {
 		return nil, errors.Errorf("Invalid range specified: start=%d end=%d", start, end)
 	}
@@ -333,6 +415,12 @@ func (b *Bucket) getRange(_ context.Context, name string, off, length int64) (io
 	var opts []alioss.Option
 	if length != -1 {
 		opt, err := b.setRange(off, off+length-1, name)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, opt)
+	} else if off > 0 {
+		opt, err := b.setRange(off, 0, name)
 		if err != nil {
 			return nil, err
 		}

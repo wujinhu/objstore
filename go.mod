@@ -37,6 +37,9 @@ require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v0.5.1 // indirect
 	github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751 // indirect
 	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137 // indirect
+	github.com/alibabacloud-go/debug v0.0.0-20190504072949-9472017b5c68 // indirect
+	github.com/alibabacloud-go/tea v1.1.8 // indirect
+	github.com/aliyun/credentials-go v1.2.4 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.11.0 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.12.1 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.1.7 // indirect
